@@ -1,0 +1,1 @@
+{"budgets":{"diffAndSecretScanSeconds":5,"prFastTotalSeconds":60,"staticGatesSeconds":30},"doctrine":"doctrine-v0.1.0-draft","policyVersion":1,"predicates":{"component_entity_cap":null,"max_responsibility_shifts":0,"no_new_smells":true},"profile":"PR-Fast","suppressions":[],"zeroToleranceCounters":["unresolvedSymbols","secretsFound","unmappedClaims","newSmells"]}

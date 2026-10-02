@@ -1,0 +1,44 @@
+name: Gate finding (evidence)
+description: A red-team gate fired. Evidence only - no prose claims.
+labels: ["needs-evidence"]
+body:
+  - type: input
+    id: gate
+    attributes:
+      label: Gate name
+      description: Contract name, e.g. unresolvedSymbols, newSmells, policyStamp.
+    validations:
+      required: true
+  - type: input
+    id: shas
+    attributes:
+      label: Base and head SHA
+      placeholder: "base=... head=..."
+    validations:
+      required: true
+  - type: input
+    id: location
+    attributes:
+      label: "Location (file:line)"
+    validations:
+      required: true
+  - type: textarea
+    id: counters
+    attributes:
+      label: Expected vs actual counter
+      description: Paste the counter fields from verdict.json.
+    validations:
+      required: true
+  - type: input
+    id: repro
+    attributes:
+      label: Repro command (one line)
+    validations:
+      required: true
+  - type: textarea
+    id: artifacts
+    attributes:
+      label: Artifacts
+      description: Link the verdict.json artifact and pinned tool versions.
+    validations:
+      required: true

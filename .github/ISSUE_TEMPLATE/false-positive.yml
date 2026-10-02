@@ -1,0 +1,24 @@
+name: False positive (config fix)
+description: A gate fired wrongly. Fixed by config plus regression fixture, never by debate.
+labels: ["false-positive"]
+body:
+  - type: input
+    id: gate
+    attributes:
+      label: Gate name
+    validations:
+      required: true
+  - type: textarea
+    id: verdict
+    attributes:
+      label: The verdict.json that fired
+      description: Paste or link the artifact; include finding hash.
+    validations:
+      required: true
+  - type: textarea
+    id: fixture
+    attributes:
+      label: Regression fixture
+      description: Link the fixture that must pass after the config change.
+    validations:
+      required: true

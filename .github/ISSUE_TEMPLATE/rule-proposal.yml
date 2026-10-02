@@ -1,0 +1,31 @@
+name: Rule proposal (three artifacts)
+description: Propose a new gate or rule. Three artifacts or no code.
+labels: ["rule-proposal"]
+body:
+  - type: input
+    id: gate
+    attributes:
+      label: Proposed gate or counter name
+      description: The name is the contract. Enter it in the verdict schema first.
+    validations:
+      required: true
+  - type: textarea
+    id: bad
+    attributes:
+      label: "Artifact 1: planted bad PR that must block"
+      description: Link the fixture PR and its expected verdict.
+    validations:
+      required: true
+  - type: textarea
+    id: clean
+    attributes:
+      label: "Artifact 2: clean PR that must pass"
+      description: Link the fixture PR and its expected verdict.
+    validations:
+      required: true
+  - type: input
+    id: runtime
+    attributes:
+      label: "Artifact 3: measured runtime (seconds, on which profile)"
+    validations:
+      required: true
