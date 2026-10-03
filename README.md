@@ -5,8 +5,11 @@ more than its evidence: one PR produces one machine-readable verdict,
 deterministic on re-run, traceable to an owner-stamped policy.
 
 Status: private draft (doctrine 0.1.0-draft, verdict schema 1).
-Not implemented yet. No CI in any consuming repo changes until the owner
-promotes a signed doctrine tag.
+MVP step 1 is implemented on branch `mvp/pr-redteam-step1`: diff
+counters, ruff F821, secret patterns, schema-valid `verdict.json`,
+normalized hash, comment renderer. Architecture predicates and
+red-green verification are step 2. No consuming repo's CI changes
+until the owner promotes a signed doctrine tag.
 
 ## Layout
 
@@ -20,6 +23,12 @@ promotes a signed doctrine tag.
 - `fixtures/` — planted bad PRs, clean PRs, injection issues, golden
   verdicts. Claims are verified against these, not against prose.
 - `.github/ISSUE_TEMPLATE/` — evidence-first issue forms for dogfooding.
+- `pr_redteam/` — the gate CLI (`run`, `verify`, `render`). MVP scope is
+  stated in `pr_redteam/core.py`; unwired counters read 0 = not run.
+- `tests/` — fixture tests: clean pass, planted invented symbol, planted
+  secret, double-run hash.
+- `skills/pr-redteam/` — the agent skill for running the gate locally
+  and contributing through evidence-based issues.
 
 ## How agents consume this
 
