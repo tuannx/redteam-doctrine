@@ -97,3 +97,22 @@ field visible; "Any other links" is the only slot found. Do not assume.
 Build or skip. If build: one template, one load-bearing integration verified on
 testnet first, docs written to the 30-pt rubric from hour one, G1-G9 run locally
 before the form is touched. Registration/submission is an external send: owner sends.
+
+## Outcome (2026-10-03, after owner GO stamp)
+
+Owner stamped GO 2026-10-03 09:03 CDT, overriding the block verdict. Built
+`tuannx/scaffold-hbar-milestone-escrow` (USD-priced milestone escrow, Chainlink-gated funding,
+optional HCS audit mirror). Key evidence:
+
+- Unit bug caught by on-chain revert: Hedera EVM settles tinybar, JSON-RPC wire is weibar.
+  `Underfunded(required=978946962415680850, sent=99852590)`; fixed (quoteHbarTinybar, convert
+  x1e10 once at the client wire boundary), commit ac776c9.
+- Testnet proof: contract 0x3d2D1E677D272560FF04994098C834d42985e94b (0.0.10843611);
+  deploy/create/fund/release HashScan links in the template README and the submission pack.
+- True G1: repo flipped public, `npm create scaffold-hbar@latest -- --template
+  tuannx/scaffold-hbar-milestone-escrow` scaffolded clean; install/lint/12-of-12 tests/build/
+  boot probes all pass; example reuses the live testnet deployment (price 10215058,
+  escrowCount 1), no redeploy.
+- Submission pack prepared for owner to send (form, DX survey drafted from real friction);
+  owner submits before Sun 2026-10-04 23:59 ET. HCS topic creation failed from this VM
+  (SDK gRPC DEADLINE_EXCEEDED); module stays fail-soft/unconfigured by design.
