@@ -36,4 +36,16 @@ Agents pin a signed doctrine tag, never `main`. Every verdict and every
 dogfood issue records `doctrineVersion` and `policyHash`. An agent that
 cannot verify the pinned doctrine hash does not act.
 
+## G-A-E alignment (2026-10-02)
+
+The doctrine is aligned to the three highest-scored decision families:
+G AI-Generated Code Gate, A PR & CI Merge Gate, E Monorepo & OSS
+Maintainer. One Decision Core, three lanes (agent / pr / maintainer),
+one verdict schema. Agent lane treats WARN as BLOCK; maintainer lane
+only surfaces WARN/BLOCK and protected-path hits. See
+`ALIGNMENT-GAE.md` for the 30-case map, triage weights, and rollout.
+
+Policy profiles: `policy/policy.agent.json`, `policy/policy.pr.json`,
+`policy/policy.maintainer.json`.
+
 Publishing model, trust chain, and rollout order: see `SPEC.md`.

@@ -101,6 +101,66 @@ def count_unresolved_symbols(repo: Path, base: str, head: str) -> tuple[int, lis
     return len(findings), findings
 
 
+DEFAULT_PROTECTED_PATHS = (".redteam/", ".github/workflows/", "schema/", "CODEOWNERS")
+DEFAULT_TRIAGE_WEIGHTS = {
+    "block": 100, "newSmell": 40, "responsibilityShift": 25,
+    "protectedPathHit": 20, "newDependency": 10, "packageTouched": 5,
+    "safeLargeDeletionBonus": -15,
+}
+
+
+def count_packages_touched(files: list[dict]) -> int:
+    packages = set()
+    for item in files:
+        parts = Path(item["path"]).parts
+        if len(parts) >= 2:
+            packages.add("/".join(parts[:2]))
+        elif parts:
+            packages.add(parts[0])
+    return len(packages)
+
+
+def count_protected_path_hits(files: list[dict], protected=DEFAULT_PROTECTED_PATHS) -> int:
+    hits = 0
+    for item in files:
+        path = item["path"]
+        if any(path == p.rstrip("/") or path.startswith(p) for p in protected):
+            hits += 1
+    return hits
+
+
+def compute_routing(verdict_word: str, counters: dict, actor_kind: str,
+                      weights: dict, self_merge_enabled: bool = False) -> dict:
+    is_block = verdict_word == "block"
+    safe_large_deletion = (
+        counters.get("responsibilityShifts", 0) == 0
+        and counters.get("newSmells", 0) == 0
+        and counters.get("netLocChanged", 0) < 0
+    )
+    priority = (
+        weights["block"] * (1 if is_block else 0)
+        + weights["newSmell"] * min(counters.get("newSmells", 0), 5)
+        + weights["responsibilityShift"] * min(counters.get("responsibilityShifts", 0), 4)
+        + weights["protectedPathHit"] * (1 if counters.get("protectedPathHits", 0) else 0)
+        + weights["newDependency"] * min(counters.get("newDependencies", 0), 3)
+        + weights["packageTouched"] * min(counters.get("packagesTouched", 0), 4)
+        + (weights["safeLargeDeletionBonus"] if safe_large_deletion else 0)
+    )
+    lane = "agent" if actor_kind == "agent" else "pr"
+    review_required = (
+        verdict_word in ("warn", "block")
+        or counters.get("protectedPathHits", 0) > 0
+    )
+    self_merge = bool(
+        self_merge_enabled and verdict_word == "pass"
+        and counters.get("responsibilityShifts", 0) == 0
+        and actor_kind == "agent"
+    )
+    return {"lane": lane, "maintainerReviewRequired": review_required,
+            "selfMergeEligible": self_merge,
+            "triagePriority": max(priority, 0)}
+
+
 def evaluate_architecture_predicates(repo: Path, base: str, head: str) -> dict:
     # Step 2 wires arcade-agent predicates. Step 1 reports zeros and the
     # comment renderer states this scope; a zero here is "not run", and
@@ -111,7 +171,10 @@ def evaluate_architecture_predicates(repo: Path, base: str, head: str) -> dict:
 
 def build_verdict(repo: Path, base: str, head: str, actor_app: str,
                   run_id: str, policy_hash: str = "mvp-step1",
-                  policy_version: int = 1) -> dict:
+                  policy_version: int = 1, actor_kind: str = "unknown",
+                  agent_id: str = "", task_id: str = "", attempt: int = 0,
+                  warn_as_block: bool = False,
+                  self_merge_enabled: bool = False) -> dict:
     scope = collect_diff_scope(repo, base, head)
     added = _added_lines(repo, base, head)
     unresolved, findings = count_unresolved_symbols(repo, base, head)
@@ -120,6 +183,11 @@ def build_verdict(repo: Path, base: str, head: str, actor_app: str,
     counters = {
         "netLocChanged": scope["netLocChanged"],
         "filesTouched": scope["filesTouched"],
+        "packagesTouched": count_packages_touched(scope["files"]),
+        "protectedPathHits": count_protected_path_hits(scope["files"]),
+        "largestFileAddedLines": max(
+            (f["added"] for f in scope["files"]), default=0
+        ),
         "deadCodeCandidates": 0,
         "newDependencies": count_new_dependencies(added),
         "newPublicSymbols": 0,
@@ -137,18 +205,30 @@ def build_verdict(repo: Path, base: str, head: str, actor_app: str,
         "nonOwnerCommandAttempts": 0,
     }
     blocked = counters["unresolvedSymbols"] > 0 or counters["secretsFound"] > 0
+    warn = counters["newDependencies"] > 0 and actor_kind == "human"
+    if warn_as_block and actor_kind == "agent" and counters["newDependencies"] > 0:
+        blocked = True
+        warn = False
+    verdict_word = "block" if blocked else ("warn" if warn else "pass")
+    routing = compute_routing(
+        verdict_word, counters, actor_kind, DEFAULT_TRIAGE_WEIGHTS,
+        self_merge_enabled=self_merge_enabled,
+    )
+    actor = {"app": actor_app, "runId": run_id, "kind": actor_kind,
+             "agentId": agent_id, "taskId": task_id, "attempt": attempt}
     return {
         "schemaVersion": 1,
         "doctrineVersion": "doctrine-v0.1.0-draft",
         "pr": {"baseSha": base, "headSha": head},
         "policy": {"policyVersion": policy_version, "policyHash": policy_hash,
                    "coreVersion": CORE_VERSION},
-        "actor": {"app": actor_app, "runId": run_id},
+        "actor": actor,
         "attestation": "",
         "counters": counters,
         "tests": {"redOnBase": False, "greenOnHead": False,
                   "changedLinesCoveredPercent": 0, "mutationSurvivorsSampled": 0},
-        "verdict": "block" if blocked else "pass",
+        "verdict": verdict_word,
+        "routing": routing,
         "findings": findings,
     }
 
@@ -160,28 +240,48 @@ def hash_normalized_verdict(verdict: dict) -> str:
 
 
 def render_pr_comment_from_verdict(verdict: dict, verdict_hash: str) -> str:
+    # Keyword-based output, Simple English rules: first line gives the
+    # verdict, one fact per line, key: value, no table, no prose.
     c = verdict["counters"]
+    if verdict["verdict"] == "block":
+        next_action = "fix findings"
+    elif verdict.get("routing", {}).get("maintainerReviewRequired"):
+        next_action = "owner review"
+    else:
+        next_action = "none"
     lines = [
         "<!-- pr-redteam-verdict -->",
-        f"**pr_redteam: {verdict['verdict'].upper()}** "
-        f"(`{verdict['pr']['baseSha'][:7]}..{verdict['pr']['headSha'][:7]}`, "
-        f"hash `{verdict_hash[:12]}`)",
-        "",
-        "| counter | value |",
-        "| --- | ---: |",
-        f"| netLocChanged | {c['netLocChanged']} |",
-        f"| filesTouched | {c['filesTouched']} |",
-        f"| newDependencies | {c['newDependencies']} |",
-        f"| unresolvedSymbols | {c['unresolvedSymbols']} |",
-        f"| secretsFound | {c['secretsFound']} |",
-        "",
-        "Scope: MVP step 1 (diff counters, ruff F821, secret patterns). "
-        "Architecture predicates and red-green tests are not wired yet; "
-        "their counters read 0 = not run.",
+        f"verdict: {verdict['verdict'].upper()}",
+        f"range: {verdict['pr']['baseSha'][:7]}..{verdict['pr']['headSha'][:7]}",
+        f"hash: {verdict_hash[:12]}",
+        f"filesTouched: {c['filesTouched']}",
+        f"netLocChanged: {c['netLocChanged']}",
+        f"packagesTouched: {c.get('packagesTouched', 0)}",
+        f"protectedPathHits: {c.get('protectedPathHits', 0)}",
+        f"largestFileAddedLines: {c.get('largestFileAddedLines', 0)}",
+        f"newDependencies: {c['newDependencies']}",
+        f"unresolvedSymbols: {c['unresolvedSymbols']}",
+        f"secretsFound: {c['secretsFound']}",
     ]
-    for finding in verdict["findings"]:
-        lines.append(
-            f"- `{finding['gate']}` {finding['file']}:{finding['line']} — "
-            f"{finding['evidence']}"
-        )
+    routing = verdict.get("routing")
+    if routing:
+        lines += [
+            f"lane: {routing['lane']}",
+            f"maintainerReviewRequired: "
+            f"{str(routing['maintainerReviewRequired']).lower()}",
+            f"triagePriority: {routing['triagePriority']}",
+            f"selfMergeEligible: {str(routing['selfMergeEligible']).lower()}",
+        ]
+    if verdict["findings"]:
+        for finding in verdict["findings"]:
+            lines.append(
+                f"finding: {finding['gate']} "
+                f"{finding['file']}:{finding['line']} {finding['evidence']}"
+            )
+    else:
+        lines.append("findings: none")
+    lines += [
+        "notRun: architecture predicates, red-green tests",
+        f"nextAction: {next_action}",
+    ]
     return "\n".join(lines) + "\n"
