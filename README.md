@@ -20,6 +20,8 @@ promotes a signed doctrine tag.
 - `fixtures/` — planted bad PRs, clean PRs, injection issues, golden
   verdicts. Claims are verified against these, not against prose.
 - `.github/ISSUE_TEMPLATE/` — evidence-first issue forms for dogfooding.
+- `bounties/` — bounty/hackathon intel dossiers, evidence-mapped, filed
+  before any build decision.
 
 ## How agents consume this
 
