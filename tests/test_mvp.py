@@ -59,7 +59,8 @@ def test_planted_invented_symbol_blocks(repo: Path) -> None:
 
 def test_planted_secret_blocks(repo: Path) -> None:
     base = git(repo, "rev-parse", "HEAD")
-    (repo / "notes.txt").write_text("token ghp_0123456789abcdefghij0123456789\n")
+    fake_token = "ghp_" + "0" * 24 + "abcdefghij"
+    (repo / "notes.txt").write_text(f"token {fake_token}\n")
     git(repo, "add", "-A")
     git(repo, "commit", "-q", "-m", "leak")
     head = git(repo, "rev-parse", "HEAD")
