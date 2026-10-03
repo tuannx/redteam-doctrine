@@ -1,0 +1,32 @@
+name: selftest
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: pytest -q
+      - name: self-gate (this PR must pass pr_redteam)
+        if: github.event_name == 'pull_request'
+        run: |
+          pr_redteam run --repo . \
+            --base "${{ github.event.pull_request.base.sha }}" \
+            --head "${{ github.event.pull_request.head.sha }}" \
+            --out verdict.json --actor-app selftest --run-id "${{ github.run_id }}"
+          jq -e '.verdict != "block"' verdict.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verdict
+          path: verdict.json
+          if-no-files-found: ignore
