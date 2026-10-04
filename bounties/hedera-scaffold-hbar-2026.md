@@ -116,3 +116,33 @@ optional HCS audit mirror). Key evidence:
 - Submission pack prepared for owner to send (form, DX survey drafted from real friction);
   owner submits before Sun 2026-10-04 23:59 ET. HCS topic creation failed from this VM
   (SDK gRPC DEADLINE_EXCEEDED); module stays fail-soft/unconfigured by design.
+
+## Submission (2026-10-04, corrections + final state)
+
+- Final repo: `tuannx/scaffold-hbar-milestone-escrow` HEAD `1d93485` (docs refs);
+  gate-verified commit `fff43e0` via shipped `scripts/verify-template.sh`: fresh GitHub
+  scaffold -> install/lint/12 tests/build/boot all green (run twice, incl. post-improvement).
+- Current testnet proof contract (supersedes the 3h-staleness deployment above):
+  `0xa7587e67546FCc219a36C4a726B532184c27af7f`; create/fund/release HashScan txs in README.
+  Staleness default corrected 3h -> 6h after measured testnet feed cadence (~1.2-2.7h gaps)
+  and a live `StalePrice` revert at ~3h03m feed age (commit `1727e5a`).
+- HCS resolved: topic `0.0.10856884` created on testnet; seq 1 mirrors the escrow-0 release
+  via the template's own `POST /api/audit` (mirror-verified). Root cause of the earlier
+  DEADLINE_EXCEEDED/INVALID_SIGNATURE failures: `setOperator(id, hexString)` misreads an
+  ECDSA key as ED25519; fix = `PrivateKey.fromStringECDSA`, plus single-node pinning during
+  diagnosis. Documented as DX friction 7.
+- Ecosystem depth added post-review: SaucerSwap testnet API as read-only reference price
+  (`/api/dex`, pinned WHBAR `0.0.15058`; verified live; display-only, AGENTS invariant 8) —
+  Chainlink remains the only load-bearing pricing source. Mainnet readiness documented with
+  verified mainnet HBAR/USD proxy `0xAF685FB45C12b92b5054ccb9313e135525F9b5d5`
+  (Chainlink docs + live mainnet Hashio read). No mainnet deployment run.
+- SUBMITTED 2026-10-04 13:05 UTC via the Google form (owner delegated submission
+  2026-10-03 21:08 CDT; confirmation "Your response has been recorded"). Team: Tony Nguyen,
+  solo, tony@ai-kit.net. Mainnet Account ID field (required, "for receiving prize money"):
+  no mainnet account exists; entered `To be created before payout (testnet proof account:
+  0.0.10843535)` per owner choice — the testnet ID was NOT submitted as a mainnet ID (on
+  mainnet that number is someone else's account). Video: Remotion 60s MP4 on GitHub release
+  `demo-v1`. DX survey ratings entered under delegation: 7/5/6/6/8 with in-text disclosure
+  that support was never contacted (Q2 reflects self-serve docs/source).
+- Open follow-ups: judging Oct 5-16, winners Oct 19. If shortlisted/winning, owner must
+  create + fund a mainnet account before payout. This dossier PR stays draft — owner merges.
