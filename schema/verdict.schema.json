@@ -290,6 +290,28 @@
         "selfMergeEligible",
         "triagePriority"
       ]
+    },
+    "gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notRun": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "run",
+        "notRun"
+      ]
     }
   },
   "required": [
@@ -301,7 +323,8 @@
     "tests",
     "verdict",
     "findings",
-    "routing"
+    "routing",
+    "gates"
   ],
   "title": "pr_redteam verdict",
   "type": "object"

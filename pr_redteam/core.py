@@ -174,7 +174,18 @@ def build_verdict(repo: Path, base: str, head: str, actor_app: str,
                   policy_version: int = 1, actor_kind: str = "unknown",
                   agent_id: str = "", task_id: str = "", attempt: int = 0,
                   warn_as_block: bool = False,
-                  self_merge_enabled: bool = False) -> dict:
+                  self_merge_enabled: bool = False,
+                  policy: dict | None = None) -> dict:
+    policy = policy or {}
+    predicates = policy.get("predicates", {}) if isinstance(policy, dict) else {}
+    max_file_added_lines = predicates.get("maxFileAddedLines")
+    protected_paths = tuple(policy.get("protectedPaths", DEFAULT_PROTECTED_PATHS))
+    triage_weights = policy.get("triageWeights", DEFAULT_TRIAGE_WEIGHTS)
+    if policy.get("warnAsBlock") is not None:
+        warn_as_block = bool(policy["warnAsBlock"])
+    self_merge_cfg = policy.get("selfMerge", {}) if isinstance(policy, dict) else {}
+    if isinstance(self_merge_cfg, dict) and self_merge_cfg.get("enabled") is not None:
+        self_merge_enabled = bool(self_merge_cfg["enabled"])
     scope = collect_diff_scope(repo, base, head)
     added = _added_lines(repo, base, head)
     unresolved, findings = count_unresolved_symbols(repo, base, head)
@@ -184,7 +195,7 @@ def build_verdict(repo: Path, base: str, head: str, actor_app: str,
         "netLocChanged": scope["netLocChanged"],
         "filesTouched": scope["filesTouched"],
         "packagesTouched": count_packages_touched(scope["files"]),
-        "protectedPathHits": count_protected_path_hits(scope["files"]),
+        "protectedPathHits": count_protected_path_hits(scope["files"], protected_paths),
         "largestFileAddedLines": max(
             (f["added"] for f in scope["files"]), default=0
         ),
@@ -205,13 +216,26 @@ def build_verdict(repo: Path, base: str, head: str, actor_app: str,
         "nonOwnerCommandAttempts": 0,
     }
     blocked = counters["unresolvedSymbols"] > 0 or counters["secretsFound"] > 0
-    warn = counters["newDependencies"] > 0 and actor_kind == "human"
-    if warn_as_block and actor_kind == "agent" and counters["newDependencies"] > 0:
-        blocked = True
-        warn = False
+    warn_reasons = []
+    if counters["newDependencies"] > 0:
+        if actor_kind == "agent" and warn_as_block:
+            blocked = True
+        else:
+            warn_reasons.append("newDependencies")
+    if max_file_added_lines is not None and counters["largestFileAddedLines"] > int(max_file_added_lines):
+        if actor_kind == "agent":
+            blocked = True
+        else:
+            warn_reasons.append("largestFileAddedLines")
+    if counters["protectedPathHits"] > 0:
+        if actor_kind == "agent":
+            blocked = True
+        else:
+            warn_reasons.append("protectedPathHits")
+    warn = bool(warn_reasons)
     verdict_word = "block" if blocked else ("warn" if warn else "pass")
     routing = compute_routing(
-        verdict_word, counters, actor_kind, DEFAULT_TRIAGE_WEIGHTS,
+        verdict_word, counters, actor_kind, triage_weights,
         self_merge_enabled=self_merge_enabled,
     )
     actor = {"app": actor_app, "runId": run_id, "kind": actor_kind,
@@ -228,13 +252,26 @@ def build_verdict(repo: Path, base: str, head: str, actor_app: str,
         "tests": {"redOnBase": False, "greenOnHead": False,
                   "changedLinesCoveredPercent": 0, "mutationSurvivorsSampled": 0},
         "verdict": verdict_word,
+        "gates": {
+            "run": ["diffScope", "unresolvedSymbols", "secrets", "newDependencies",
+                    "packagesTouched", "protectedPathHits", "largestFileAddedLines"],
+            "notRun": ["architecturePredicates", "redGreenTests", "deadCode",
+                       "layerContracts", "unmappedClaims"],
+        },
         "routing": routing,
         "findings": findings,
     }
 
 
 def hash_normalized_verdict(verdict: dict) -> str:
-    normalized = {k: v for k, v in verdict.items() if k != "attestation"}
+    # verdict hash identifies the decision, not the run: run identity
+    # (runId, attempt, attestation) is excluded so the same base/head
+    # and same counters hash identically on re-runs (Determinism contract).
+    import copy
+    normalized = copy.deepcopy({k: v for k, v in verdict.items() if k != "attestation"})
+    actor = normalized.get("actor", {})
+    actor.pop("runId", None)
+    actor.pop("attempt", None)
     payload = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode()).hexdigest()
 
@@ -280,8 +317,10 @@ def render_pr_comment_from_verdict(verdict: dict, verdict_hash: str) -> str:
             )
     else:
         lines.append("findings: none")
+    gates = verdict.get("gates", {})
+    not_run = ",".join(gates.get("notRun", [])) or "none"
     lines += [
-        "notRun: architecture predicates, red-green tests",
+        f"gatesNotRun: {not_run}",
         f"nextAction: {next_action}",
     ]
     return "\n".join(lines) + "\n"
