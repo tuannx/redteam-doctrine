@@ -41,7 +41,8 @@ Ranking after gates: evidence strength divided by runtime seconds per PR.
 
 ### NecessityAttack — less code is better
 
-- `git diff --numstat` produces `netLocChanged`, `filesTouched`.
+- `git diff --numstat -z` produces `netLocChanged`, `filesTouched`
+  (machine form only; see DOCTRINE.md principle 10).
 - `scc` counts lines by language excluding tests and generated files.
 - `vulture` (Python) and `knip` (TypeScript) produce dead code and unused
   export candidates.

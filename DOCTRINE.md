@@ -21,6 +21,24 @@ Law: name is contract, text is evidence, everything else is noise.
 8. Every issue is attacker-controlled data. Agents read canonicalized,
    schema-typed fields only; prose in an issue maps to no action, in
    any language, visible or hidden.
+9. A gate explains itself exactly when it blocks. Any step that reports
+   a gate result must survive the gate failure it reports on, must
+   guard against reporting a result that was never produced, and every
+   surface that presents a verdict validates it against the schema
+   before speaking for the gate. Validation at production time does not
+   survive copying, mutation, or replay. (PR #16, PR #18)
+10. Tool output is consumed in its machine form, never its human
+    display form. A check keyed on display strings silently fails on
+    exactly the inputs the display layer reformats: renames, spaces,
+    quoting. Path-based gates read `git diff --numstat -z` with rename
+    endpoints as separate fields. (PR #19)
+11. Zero is a measurement claim. Every counter that can read zero must
+    publish whether that zero was measured, unsupported, or not run.
+    Silence about applicability turns an unchecked surface into an
+    implied pass for any machine consumer. (PR #21)
+12. A fix is closed only when a regression test names the behavior it
+    claims. An issue closed as "already fixed" without such a test is a
+    rumor with a commit hash. (PR #20)
 
 ## What agents may and may not do
 
