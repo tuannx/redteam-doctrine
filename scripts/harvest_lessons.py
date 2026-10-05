@@ -98,21 +98,53 @@ def lesson_markdown(pr: dict, delta: str, source: str) -> str:
     )
 
 
+def _frontmatter(text: str) -> dict[str, str]:
+    if not text.startswith("---\n"):
+        return {}
+    header, separator, _ = text[4:].partition("\n---\n")
+    if not separator:
+        return {}
+    fields = {}
+    for line in header.splitlines():
+        key, separator, value = line.partition(":")
+        if separator:
+            fields[key.strip()] = value.strip()
+    return fields
+
+
 def harvest(prs: list[dict], inbox: Path, backfill: bool = False) -> list[str]:
     written = []
     for pr in sorted(prs, key=lambda item: item["number"]):
         if not pr.get("mergedAt"):
             continue
-        delta = extract_instruction_delta(pr.get("body"))
+        body = pr.get("body")
+        has_delta_section = any(HEADING.match(line.strip()) for line in (body or "").splitlines())
+        delta = extract_instruction_delta(body)
         source = "delta"
-        if delta is None and backfill:
-            delta = extract_backfill_candidate(pr.get("body"))
+        if delta is None and backfill and not has_delta_section:
+            delta = extract_backfill_candidate(body)
             source = "backfill"
-        if delta is None:
-            continue
         path = inbox / f"PR-{pr['number']}.md"
-        content = lesson_markdown(pr, delta, source)
-        if path.exists() and path.read_text(encoding="utf-8") == content:
+        content = lesson_markdown(pr, delta or "", source)
+        if path.exists():
+            existing = path.read_text(encoding="utf-8")
+            fields = _frontmatter(existing)
+            if fields.get("status") in ("promoted", "rejected"):
+                incoming = _frontmatter(content)
+                for field in ("pr", "url", "merged_at", "merge_sha", "source"):
+                    if field == "source" and delta is None:
+                        continue
+                    if field in fields and fields[field] != incoming[field]:
+                        raise ValueError(f"{path.name}: reviewed lesson source conflict ({field})")
+                print(
+                    f"{path.name}: reviewed lesson preserved; "
+                    "source-body comparison: notRun; owner review required",
+                    file=sys.stderr,
+                )
+                continue
+            if existing == content:
+                continue
+        if delta is None:
             continue
         inbox.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
