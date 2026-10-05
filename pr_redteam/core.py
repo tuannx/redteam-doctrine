@@ -14,6 +14,8 @@ import hashlib
 import json
 import re
 import subprocess
+import tempfile
+import tomllib
 from pathlib import Path
 
 CORE_VERSION = "0.1.0"
@@ -33,6 +35,14 @@ def _git(repo: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", "-C", str(repo), *args],
         capture_output=True, text=True, check=True,
+    )
+    return result.stdout
+
+
+def _git_blob(repo: Path, revision: str, path: str) -> bytes:
+    result = subprocess.run(
+        ["git", "-C", str(repo), "show", f"{revision}:{path}"],
+        capture_output=True, check=True,
     )
     return result.stdout
 
@@ -82,22 +92,99 @@ def count_secrets(added: list[tuple[str, str]]) -> int:
 
 
 def count_unresolved_symbols(repo: Path, base: str, head: str) -> tuple[int, list[dict]]:
-    changed = _git(repo, "diff", "--name-only", f"{base}..{head}", "--", "*.py")
-    paths = [p for p in sorted(changed.splitlines()) if (repo / p).exists()]
+    changed = _git(
+        repo, "diff", "--name-only", "--diff-filter=d", "-z",
+        f"{base}..{head}", "--", "*.py",
+    )
+    paths = sorted(p for p in changed.split("\0") if p)
     if not paths:
         return 0, []
-    result = subprocess.run(
-        ["ruff", "check", "--select", "F821", "--output-format", "json", *paths],
-        cwd=repo, capture_output=True, text=True,
-    )
+    entries = _git(repo, "ls-tree", "-r", "-z", head).split("\0")
+    modes = {
+        path: metadata.split()[0]
+        for entry in entries if entry
+        for metadata, path in [entry.split("\t", 1)]
+    }
     findings = []
-    for item in json.loads(result.stdout or "[]"):
-        findings.append({
-            "gate": "unresolvedSymbols",
-            "file": str(Path(item["filename"]).relative_to(repo)),
-            "line": int(item["location"]["row"]),
-            "evidence": item["message"],
-        })
+    with tempfile.TemporaryDirectory(prefix="pr-redteam-") as directory:
+        snapshot = Path(directory).resolve()
+        groups: dict[Path | None, list[str]] = {}
+        configurations: dict[Path, dict | None] = {}
+        for path in paths:
+            target = (snapshot / path).resolve()
+            if not target.is_relative_to(snapshot) or modes.get(path) not in {"100644", "100755"}:
+                raise ValueError(f"unsupported pinned Python file: {path}")
+            payload = _git_blob(repo, head, path)
+            try:
+                payload.decode("utf-8")
+            except UnicodeDecodeError as error:
+                raise ValueError(f"unsupported pinned Python encoding: {path}") from error
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(payload)
+            configuration = None
+            parent = Path(path).parent
+            for ancestor in (parent, *parent.parents):
+                for name in (".ruff.toml", "ruff.toml", "pyproject.toml"):
+                    candidate = ancestor / name
+                    if candidate.as_posix() not in modes:
+                        continue
+                    if modes[candidate.as_posix()] not in {"100644", "100755"}:
+                        raise ValueError(f"unsupported pinned Ruff configuration: {candidate}")
+                    if candidate not in configurations:
+                        data = tomllib.loads(_git_blob(repo, head, candidate.as_posix()).decode("utf-8"))
+                        if name == "pyproject.toml":
+                            data = data.get("tool", {}).get("ruff")
+                        configurations[candidate] = data
+                    if configurations[candidate] is not None:
+                        configuration = candidate
+                        break
+                if configuration is not None:
+                    break
+            groups.setdefault(configuration, []).append(str(target))
+
+        for configuration, sources in groups.items():
+            current = configuration
+            visited: set[Path] = set()
+            while current is not None:
+                if current in visited:
+                    raise ValueError(f"cyclic pinned Ruff configuration: {current}")
+                visited.add(current)
+                path = current.as_posix()
+                if modes.get(path) not in {"100644", "100755"}:
+                    raise ValueError(f"unsupported pinned Ruff configuration: {path}")
+                payload = _git_blob(repo, head, path)
+                target = snapshot / current
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(payload)
+                data = tomllib.loads(payload.decode("utf-8"))
+                if current.name == "pyproject.toml":
+                    data = data.get("tool", {}).get("ruff", {})
+                extend = data.get("extend")
+                current = None
+                if extend is not None:
+                    if not isinstance(extend, str) or "$" in extend or extend.startswith("~"):
+                        raise ValueError("unsupported pinned Ruff configuration extend")
+                    extended = (target.parent / extend).resolve()
+                    if not extended.is_relative_to(snapshot):
+                        raise ValueError("Ruff configuration extends outside pinned snapshot")
+                    current = extended.relative_to(snapshot)
+            options = ["--config", str(snapshot / configuration)] if configuration else ["--isolated"]
+            result = subprocess.run(
+                ["ruff", "check", "--select", "F821", "--output-format", "json",
+                 "--no-cache", *options, *sources],
+                cwd=(snapshot / configuration).parent if configuration else snapshot,
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode not in (0, 1):
+                result.check_returncode()
+            for item in json.loads(result.stdout):
+                findings.append({
+                    "gate": "unresolvedSymbols",
+                    "file": str(Path(item["filename"]).relative_to(snapshot)),
+                    "line": int(item["location"]["row"]),
+                    "evidence": item["message"],
+                })
+    findings.sort(key=lambda finding: (finding["file"], finding["line"], finding["evidence"]))
     return len(findings), findings
 
 
