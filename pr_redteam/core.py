@@ -91,6 +91,34 @@ def count_secrets(added: list[tuple[str, str]]) -> int:
     )
 
 
+UNSUPPORTED_SOURCE_EXTENSIONS = {
+    ".c", ".cc", ".cpp", ".cs", ".go", ".h", ".hpp", ".java", ".js",
+    ".jsx", ".kt", ".kts", ".mjs", ".cjs", ".php", ".rb", ".rs",
+    ".scala", ".sh", ".swift", ".ts", ".tsx",
+}
+
+
+def unresolved_symbols_check(files: list[dict]) -> dict:
+    """Applicability of the Python-only F821 check for this diff.
+
+    A counter of 0 must say whether it was measured (Python changed),
+    unsupported (only languages with no wired checker changed), or not
+    run at all (no source files changed). Without this, a machine
+    consumer cannot tell a clean measured zero from an unchecked one.
+    """
+    paths = [item["path"] for item in files]
+    unsupported = sorted(
+        p for p in paths if Path(p).suffix in UNSUPPORTED_SOURCE_EXTENSIONS
+    )
+    if any(Path(p).suffix == ".py" for p in paths):
+        status = "measured"
+    elif unsupported:
+        status = "unsupported"
+    else:
+        status = "notRun"
+    return {"unresolvedSymbols": status, "unsupportedFiles": unsupported}
+
+
 def count_unresolved_symbols(repo: Path, base: str, head: str) -> tuple[int, list[dict]]:
     changed = _git(
         repo, "diff", "--name-only", "--diff-filter=d", "-z",
@@ -311,6 +339,7 @@ def build_verdict(repo: Path, base: str, head: str, actor_app: str,
                    "coreVersion": CORE_VERSION},
         "actor": actor,
         "attestation": "",
+        "checks": unresolved_symbols_check(scope["files"]),
         "counters": counters,
         "tests": {"redOnBase": False, "greenOnHead": False,
                   "changedLinesCoveredPercent": 0, "mutationSurvivorsSampled": 0},
@@ -350,6 +379,13 @@ def render_pr_comment_from_verdict(verdict: dict, verdict_hash: str) -> str:
         f"unresolvedSymbols: {c['unresolvedSymbols']}",
         f"secretsFound: {c['secretsFound']}",
     ]
+    checks = verdict.get("checks") or {}
+    if checks.get("unresolvedSymbols"):
+        lines.append(f"unresolvedSymbolsCheck: {checks['unresolvedSymbols']}")
+        if checks.get("unsupportedFiles"):
+            lines.append(
+                "unsupportedFiles: " + ", ".join(checks["unsupportedFiles"])
+            )
     routing = verdict.get("routing")
     if routing:
         lines += [

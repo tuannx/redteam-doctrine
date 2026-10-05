@@ -43,6 +43,30 @@
     "attestation": {
       "type": "string"
     },
+    "checks": {
+      "additionalProperties": false,
+      "properties": {
+        "unresolvedSymbols": {
+          "enum": [
+            "measured",
+            "unsupported",
+            "notRun"
+          ],
+          "type": "string"
+        },
+        "unsupportedFiles": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "unresolvedSymbols",
+        "unsupportedFiles"
+      ],
+      "type": "object"
+    },
     "counters": {
       "additionalProperties": false,
       "properties": {
