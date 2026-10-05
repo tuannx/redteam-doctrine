@@ -22,6 +22,12 @@ def _load_schema() -> dict:
     return json.loads(SCHEMA_PATH.read_text())
 
 
+def _load_verdict(path: str) -> dict:
+    verdict = json.loads(Path(path).read_text())
+    jsonschema.validate(verdict, _load_schema())
+    return verdict
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     verdict = build_verdict(
         Path(args.repo), args.base, args.head, args.actor_app, args.run_id
@@ -33,14 +39,13 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
-    verdict = json.loads(Path(args.verdict).read_text())
-    jsonschema.validate(verdict, _load_schema())
+    verdict = _load_verdict(args.verdict)
     print(hash_normalized_verdict(verdict))
     return 0
 
 
 def cmd_render(args: argparse.Namespace) -> int:
-    verdict = json.loads(Path(args.verdict).read_text())
+    verdict = _load_verdict(args.verdict)
     sys.stdout.write(
         render_pr_comment_from_verdict(verdict, hash_normalized_verdict(verdict))
     )
