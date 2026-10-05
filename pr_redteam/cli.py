@@ -22,9 +22,22 @@ def _load_schema() -> dict:
     return json.loads(SCHEMA_PATH.read_text())
 
 
+def _load_policy(path: str | None) -> tuple[dict, str, int]:
+    if not path:
+        return {}, "mvp-step1", 1
+    raw = Path(path).read_bytes()
+    policy = json.loads(raw)
+    import hashlib
+    return policy, hashlib.sha256(raw).hexdigest()[:16], int(policy.get("policyVersion", 1))
+
+
 def cmd_run(args: argparse.Namespace) -> int:
+    policy, policy_hash, policy_version = _load_policy(args.policy)
     verdict = build_verdict(
-        Path(args.repo), args.base, args.head, args.actor_app, args.run_id
+        Path(args.repo), args.base, args.head, args.actor_app, args.run_id,
+        policy_hash=policy_hash, policy_version=policy_version,
+        actor_kind=args.actor_kind, agent_id=args.agent_id,
+        task_id=args.task_id, attempt=args.attempt, policy=policy,
     )
     jsonschema.validate(verdict, _load_schema())
     Path(args.out).write_text(json.dumps(verdict, indent=2, sort_keys=True) + "\n")
@@ -58,6 +71,12 @@ def main() -> int:
     run.add_argument("--out", default="verdict.json")
     run.add_argument("--actor-app", default="pr-redteam")
     run.add_argument("--run-id", default="local")
+    run.add_argument("--policy", default=None)
+    run.add_argument("--actor-kind", default="unknown",
+                     choices=["human", "agent", "ci", "unknown"])
+    run.add_argument("--agent-id", default="")
+    run.add_argument("--task-id", default="")
+    run.add_argument("--attempt", type=int, default=0)
     run.set_defaults(func=cmd_run)
 
     verify = sub.add_parser("verify")
