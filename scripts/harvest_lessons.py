@@ -3,9 +3,16 @@
 
 Deterministic: same PR list in, same lesson files out. No LLM anywhere.
 PR bodies are attacker-controlled data (DOCTRINE.md §8) — this script only
-extracts the structured `## Instruction delta` section and writes it down;
-nothing harvested here edits any instruction file. Promotion happens only
-through a reviewed distillation PR (docs/LEARNING-LOOP.md).
+extracts text and writes it down; nothing harvested here edits any
+instruction file. Promotion happens only through a reviewed distillation
+PR (docs/LEARNING-LOOP.md).
+
+Modes:
+- default: only PRs carrying an `## Instruction delta` section teach.
+- --backfill: PRs without that section contribute a *candidate* built from
+  their Claim/Evidence sections (or the cleaned body when no such section
+  exists), marked `status: proposed-backfill`. A human-reviewed
+  distillation PR still decides what, if anything, becomes instruction.
 
 Input: JSON array of PR objects (gh-compatible fields: number, url,
 mergedAt, mergeCommit{oid}, body) via --prs-json or piped stdin.
@@ -19,17 +26,19 @@ import sys
 from pathlib import Path
 
 HEADING = re.compile(r"^#{2,4}\s+Instruction delta\s*$", re.IGNORECASE)
+SECTION = re.compile(r"^#{2,4}\s+(.+?)\s*$")
 NEXT_HEADING = re.compile(r"^#{1,4}\s+\S")
+COMMENTS = re.compile(r"<!--.*?-->", re.DOTALL)
+MAX_BACKFILL_CHARS = 2000
 
 
-def extract_instruction_delta(body: str | None) -> str | None:
-    """Return the delta text, or None when absent/empty/'None'."""
-    if not body:
-        return None
+def _section(body: str, names: tuple[str, ...]) -> str | None:
     lines = body.splitlines()
     start = None
+    wanted = {name.lower() for name in names}
     for index, line in enumerate(lines):
-        if HEADING.match(line.strip()):
+        match = SECTION.match(line.strip())
+        if match and match.group(1).lower() in wanted:
             start = index + 1
             break
     if start is None:
@@ -39,37 +48,70 @@ def extract_instruction_delta(body: str | None) -> str | None:
         if NEXT_HEADING.match(line.strip()) and collected:
             break
         collected.append(line)
-    text = "\n".join(collected).strip()
-    text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL).strip()
+    text = COMMENTS.sub("", "\n".join(collected)).strip()
+    return text or None
+
+
+def extract_instruction_delta(body: str | None) -> str | None:
+    """Return the delta text, or None when absent/empty/'None'."""
+    if not body:
+        return None
+    text = _section(body, ("Instruction delta",))
     if not text or text.lower() == "none":
         return None
     return text
 
 
-def lesson_markdown(pr: dict, delta: str) -> str:
+def extract_backfill_candidate(body: str | None) -> str | None:
+    """Candidate lesson source for PRs that predate the delta field.
+
+    Copies text verbatim (Claim/Evidence sections when present, else the
+    cleaned body, bounded). Copies never summarize: distillation reviews it.
+    """
+    if not body:
+        return None
+    parts = []
+    for names in (("Claim", "Mục đích"), ("Evidence", "Test")):
+        section = _section(body, names)
+        if section:
+            parts.append(section)
+    text = "\n\n".join(parts) if parts else COMMENTS.sub("", body).strip()
+    text = text.strip()
+    if not text:
+        return None
+    return text[:MAX_BACKFILL_CHARS]
+
+
+def lesson_markdown(pr: dict, delta: str, source: str) -> str:
     merge_sha = (pr.get("mergeCommit") or {}).get("oid", "")
+    status = "proposed" if source == "delta" else "proposed-backfill"
     return (
         "---\n"
         f"pr: {pr['number']}\n"
         f"url: {pr.get('url', '')}\n"
         f"merged_at: {pr.get('mergedAt', '')}\n"
         f"merge_sha: {merge_sha}\n"
-        "status: proposed\n"
+        f"source: {source}\n"
+        f"status: {status}\n"
         "---\n\n"
         f"{delta}\n"
     )
 
 
-def harvest(prs: list[dict], inbox: Path) -> list[str]:
+def harvest(prs: list[dict], inbox: Path, backfill: bool = False) -> list[str]:
     written = []
     for pr in sorted(prs, key=lambda item: item["number"]):
         if not pr.get("mergedAt"):
             continue
         delta = extract_instruction_delta(pr.get("body"))
+        source = "delta"
+        if delta is None and backfill:
+            delta = extract_backfill_candidate(pr.get("body"))
+            source = "backfill"
         if delta is None:
             continue
         path = inbox / f"PR-{pr['number']}.md"
-        content = lesson_markdown(pr, delta)
+        content = lesson_markdown(pr, delta, source)
         if path.exists() and path.read_text(encoding="utf-8") == content:
             continue
         inbox.mkdir(parents=True, exist_ok=True)
@@ -82,10 +124,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Harvest instruction deltas from merged PRs")
     parser.add_argument("--prs-json", help="Path to a gh JSON array of PRs (default: stdin)")
     parser.add_argument("--inbox", default="lessons/inbox")
+    parser.add_argument("--backfill", action="store_true",
+                        help="Also harvest Claim/Evidence candidates from PRs without a delta section")
     args = parser.parse_args()
     raw = Path(args.prs_json).read_text(encoding="utf-8") if args.prs_json else sys.stdin.read()
     prs = json.loads(raw)
-    written = harvest(prs, Path(args.inbox))
+    written = harvest(prs, Path(args.inbox), backfill=args.backfill)
     print(json.dumps({"verdict": "pass", "harvested": written}))
     return 0
 
