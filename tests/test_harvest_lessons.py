@@ -48,3 +48,28 @@ def test_harvest_writes_only_merged_prs_with_deltas(tmp_path):
     assert "status: proposed" in content and "merge_sha: abc" in content
     # Deterministic: a second run writes nothing.
     assert harvest(prs, tmp_path) == []
+
+
+PLAIN_BODY = "unresolvedSymbols read changed files from the mutable checkout.\n\nRead changed Python blobs from the pinned head instead."
+
+
+def test_backfill_copies_plain_body_verbatim(tmp_path):
+    prs = [{"number": 9, "url": "u9", "mergedAt": "2026-10-05T00:22:10Z",
+            "mergeCommit": {"oid": "abc"}, "body": PLAIN_BODY}]
+    assert harvest(prs, tmp_path) == []
+    written = harvest(prs, tmp_path, backfill=True)
+    assert written == ["PR-9.md"]
+    content = (tmp_path / "PR-9.md").read_text(encoding="utf-8")
+    assert "status: proposed-backfill" in content and "mutable checkout" in content
+
+
+def test_backfill_skips_empty_bodies_and_prefers_delta(tmp_path):
+    prs = [
+        {"number": 1, "url": "u1", "mergedAt": "2026-10-03T00:00:00Z",
+         "mergeCommit": {"oid": "a"}, "body": "  \n<!-- only a comment -->\n"},
+        {"number": 2, "url": "u2", "mergedAt": "2026-10-03T00:00:00Z",
+         "mergeCommit": {"oid": "b"}, "body": BODY},
+    ]
+    written = harvest(prs, tmp_path, backfill=True)
+    assert written == ["PR-2.md"]
+    assert "source: delta" in (tmp_path / "PR-2.md").read_text(encoding="utf-8")
