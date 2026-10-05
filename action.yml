@@ -42,26 +42,72 @@ runs:
     - name: Run gate
       id: gate
       shell: bash
+      env:
+        BASE_SHA: ${{ inputs.base }}
+        HEAD_SHA: ${{ inputs.head }}
+        VERDICT_PATH: ${{ inputs.verdict-path }}
       run: |
+        rm -f -- "$VERDICT_PATH"
         set +e
-        pr_redteam run --repo . --base "${{ inputs.base }}" --head "${{ inputs.head }}" --out "${{ inputs.verdict-path }}"
+        pr_redteam run --repo . --base "$BASE_SHA" --head "$HEAD_SHA" --out "$VERDICT_PATH"
         code=$?
-        verdict=$(python3 -c "import json; print(json.load(open('${{ inputs.verdict-path }}'))['verdict'])")
+        set -e
+        if [ "$code" -ne 0 ] && [ "$code" -ne 2 ]; then
+          rm -f -- "$VERDICT_PATH"
+          exit "$code"
+        fi
+        if ! pr_redteam verify --verdict "$VERDICT_PATH" > /dev/null; then
+          rm -f -- "$VERDICT_PATH"
+          exit 1
+        fi
+        if ! verdict=$(python3 - "$VERDICT_PATH" "$BASE_SHA" "$HEAD_SHA" <<'PY'
+        import json
+        import sys
+        from pathlib import Path
+
+        verdict = json.loads(Path(sys.argv[1]).read_text())
+        if verdict["pr"] != {"baseSha": sys.argv[2], "headSha": sys.argv[3]}:
+            raise ValueError("verdict does not match the requested SHA pair")
+        print(verdict["verdict"])
+        PY
+        ); then
+          rm -f -- "$VERDICT_PATH"
+          exit 1
+        fi
+        if [ "$code" -eq 2 ] && [ "$verdict" != "block" ]; then
+          rm -f -- "$VERDICT_PATH"
+          exit "$code"
+        fi
         echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
         echo "gate verdict: $verdict"
-        # Nonzero exit from the CLI already encodes block; surface it.
-        exit $code
+        if [ "$verdict" = "block" ]; then
+          exit 2
+        fi
+        exit "$code"
     - name: Comment verdict on PR
-      if: ${{ always() && inputs.comment == 'true' && github.event_name == 'pull_request' }}
+      if: ${{ always() && inputs.comment == 'true' && github.event_name == 'pull_request' && steps.gate.outputs.verdict != '' }}
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
+        BASE_SHA: ${{ inputs.base }}
+        HEAD_SHA: ${{ inputs.head }}
+        VERDICT_PATH: ${{ inputs.verdict-path }}
+        VERDICT: ${{ steps.gate.outputs.verdict }}
       run: |
-        if [ ! -f "${{ inputs.verdict-path }}" ]; then
-          echo "no verdict at ${{ inputs.verdict-path }}; skipping comment"
+        if [ ! -f "$VERDICT_PATH" ]; then
+          echo "no verdict at $VERDICT_PATH; skipping comment"
           exit 0
         fi
-        pr_redteam render --verdict "${{ inputs.verdict-path }}" > comment.md
+        python3 - "$VERDICT_PATH" "$BASE_SHA" "$HEAD_SHA" "$VERDICT" <<'PY'
+        import json
+        import sys
+        from pathlib import Path
+
+        verdict = json.loads(Path(sys.argv[1]).read_text())
+        if verdict["pr"] != {"baseSha": sys.argv[2], "headSha": sys.argv[3]} or verdict["verdict"] != sys.argv[4]:
+            raise ValueError("verdict does not match the current invocation")
+        PY
+        pr_redteam render --verdict "$VERDICT_PATH" > comment.md
         gh pr comment "${{ github.event.pull_request.number }}" --body-file comment.md
 
 branding:
