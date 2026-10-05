@@ -1,0 +1,65 @@
+name: "Redteam Doctrine Gate"
+description: "Deterministic PR gate: one machine-readable verdict (pass | warn | block) from pinned base/head SHAs. No LLM judge."
+author: "tuannx"
+
+inputs:
+  base:
+    description: "Base commit SHA"
+    required: true
+  head:
+    description: "Head commit SHA"
+    required: true
+  verdict-path:
+    description: "Where to write verdict.json"
+    required: false
+    default: "verdict.json"
+  comment:
+    description: "Post the rendered verdict as a PR comment (needs GH_TOKEN with pull-requests: write)"
+    required: false
+    default: "true"
+  python-version:
+    description: "Python version"
+    required: false
+    default: "3.12"
+
+outputs:
+  verdict:
+    description: "pass, warn or block"
+    value: ${{ steps.gate.outputs.verdict }}
+  verdict-path:
+    description: "Path to verdict.json"
+    value: ${{ inputs.verdict-path }}
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+    - name: Install pr_redteam (pinned to this action's ref)
+      shell: bash
+      run: pip install "${{ github.action_path }}"
+    - name: Run gate
+      id: gate
+      shell: bash
+      run: |
+        set +e
+        pr_redteam run --repo . --base "${{ inputs.base }}" --head "${{ inputs.head }}" --out "${{ inputs.verdict-path }}"
+        code=$?
+        verdict=$(python3 -c "import json; print(json.load(open('${{ inputs.verdict-path }}'))['verdict'])")
+        echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+        echo "gate verdict: $verdict"
+        # Nonzero exit from the CLI already encodes block; surface it.
+        exit $code
+    - name: Comment verdict on PR
+      if: ${{ inputs.comment == 'true' && github.event_name == 'pull_request' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        pr_redteam render --verdict "${{ inputs.verdict-path }}" > comment.md
+        gh pr comment "${{ github.event.pull_request.number }}" --body-file comment.md
+
+branding:
+  icon: "shield"
+  color: "red"
