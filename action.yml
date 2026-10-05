@@ -52,11 +52,15 @@ runs:
         # Nonzero exit from the CLI already encodes block; surface it.
         exit $code
     - name: Comment verdict on PR
-      if: ${{ inputs.comment == 'true' && github.event_name == 'pull_request' }}
+      if: ${{ always() && inputs.comment == 'true' && github.event_name == 'pull_request' }}
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
+        if [ ! -f "${{ inputs.verdict-path }}" ]; then
+          echo "no verdict at ${{ inputs.verdict-path }}; skipping comment"
+          exit 0
+        fi
         pr_redteam render --verdict "${{ inputs.verdict-path }}" > comment.md
         gh pr comment "${{ github.event.pull_request.number }}" --body-file comment.md
 
