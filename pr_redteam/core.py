@@ -48,15 +48,34 @@ def _git_blob(repo: Path, revision: str, path: str) -> bytes:
 
 
 def collect_diff_scope(repo: Path, base: str, head: str) -> dict:
-    numstat = _git(repo, "diff", "--numstat", f"{base}..{head}")
+    # -z: paths are NUL-terminated and unquoted, so renames arrive as
+    # "added<TAB>deleted<TAB><NUL>old<NUL>new<NUL>" and paths with spaces
+    # or Unicode survive intact. The human-readable form encodes a rename
+    # as "{old => new}/path", which a prefix check can never match.
+    raw = _git(repo, "diff", "--numstat", "-z", f"{base}..{head}")
+    tokens = raw.split("\0")
     files = []
     net_loc = 0
-    for line in sorted(numstat.splitlines()):
-        added, deleted, path = line.split("\t", 2)
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if not token:
+            i += 1
+            continue
+        added, deleted, path = token.split("\t", 2)
         a = 0 if added == "-" else int(added)
         d = 0 if deleted == "-" else int(deleted)
         net_loc += a - d
-        files.append({"path": path, "added": a, "deleted": d})
+        if path == "":
+            old_path, new_path = tokens[i + 1], tokens[i + 2]
+            files.append(
+                {"path": new_path, "oldPath": old_path, "added": a, "deleted": d}
+            )
+            i += 3
+        else:
+            files.append({"path": path, "added": a, "deleted": d})
+            i += 1
+    files.sort(key=lambda f: (f["path"], f.get("oldPath", "")))
     return {"files": files, "netLocChanged": net_loc, "filesTouched": len(files)}
 
 
@@ -210,8 +229,16 @@ def count_packages_touched(files: list[dict]) -> int:
 def count_protected_path_hits(files: list[dict], protected=DEFAULT_PROTECTED_PATHS) -> int:
     hits = 0
     for item in files:
-        path = item["path"]
-        if any(path == p.rstrip("/") or path.startswith(p) for p in protected):
+        # A rename touches both endpoints: moving a file out of a
+        # protected directory is as review-worthy as moving one in.
+        # Count the file once even when both sides are protected.
+        paths = [item["path"], item.get("oldPath", "")]
+        if any(
+            path == p.rstrip("/") or path.startswith(p)
+            for path in paths
+            if path
+            for p in protected
+        ):
             hits += 1
     return hits
 
